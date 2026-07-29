@@ -1,6 +1,6 @@
 /**
- * ROBÔ DE WHATSAPP - CORRESPONDENTE BANCÁRIO
- * Com Webhook Atualizado + Privacidade + 2 Erros Max + Comando CORRIGIR
+ * ROBÔ DE WHATSAPP - CORRESPONDENTE BANCÁRIO (OPÇÃO 1: NOME DIRETO DA IMOBILIÁRIA)
+ * Simples, Seguro, Direto e sem dependência de códigos ou pesquisas externas.
  */
 
 const express = require('express');
@@ -20,7 +20,7 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// URL DO NOVO WEBHOOK PUBLICADO DO GOOGLE APPS SCRIPT
+// URL do Webhook publicado do Google Apps Script
 const GOOGLE_WEBHOOK_URL = process.env.GOOGLE_WEBHOOK_URL || "https://script.google.com/macros/s/AKfycbyiAvghPgf9ONIyxWDG2WVVCU1Zpuy7MFtwJQxXakdVlHdpE7PH0IvnzefGzjZlwT40/exec";
 
 let currentQRCodeData = "";
@@ -48,24 +48,6 @@ app.get('/', async (req, res) => {
     res.send(`<!DOCTYPE html><html><head><title>Conectar Bot</title><meta charset="utf-8"><meta http-equiv="refresh" content="12"><style>body { font-family: Arial; text-align: center; padding: 30px; background: #f4f6f8; } .card { background: white; padding: 30px; border-radius: 16px; display: inline-block; } img { margin: 20px 0; border: 4px solid #128c7e; border-radius: 12px; }</style></head><body><div class="card"><h2>📱 Conectar Robô ao WhatsApp</h2><img src="${qrImage}" width="280" /></div></body></html>`);
   } catch (err) { res.status(500).send("Erro QR Code"); }
 });
-
-async function verificarCodigoImobiliaria(codigo) {
-  try {
-    const resp = await axios.get(`${GOOGLE_WEBHOOK_URL}?action=verifyCode&code=${encodeURIComponent(codigo)}`);
-    if (resp.data && resp.data.found) {
-      return { valido: true, imobiliaria: resp.data.imobiliaria, codigo: resp.data.codigo };
-    }
-  } catch (err) { console.error("Erro verificar código:", err.message); }
-  return { valido: false };
-}
-
-async function cadastrarNovaImobiliaria(nome, telefone, bairro) {
-  try {
-    const resp = await axios.post(GOOGLE_WEBHOOK_URL, { action: "cadastrarImobiliaria", nome: nome, telefone: telefone, bairro: bairro });
-    if (resp.data && resp.data.codigo) return resp.data;
-  } catch (err) { console.error("Erro cadastrar imob:", err.message); }
-  return null;
-}
 
 async function startWhatsAppBot() {
   try {
@@ -101,48 +83,48 @@ async function startWhatsAppBot() {
 
         let session = sessions[from];
 
-        // 1. GATILHOS GERAIS DE REINÍCIO OU CANCELAMENTO
+        // 1. REINICIAR CONVERSA
         if (!session || textLow === 'reiniciar' || textLow === 'menu' || textLow === 'inicio' || textLow === 'cancelar' || textLow === 'sair' || textLow === 'voltar') {
-          sessions[from] = { step: 'AGUARDANDO_CODIGO_OU_CADASTRO', errosCodigo: 0, documentos: [] };
+          sessions[from] = { step: 'AGUARDANDO_NOME_IMOBILIARIA', documentos: [] };
           await sock.sendMessage(from, { 
-            text: "👋 *Olá! Bem-vindo ao Sistema de Cadastro de Propostas.*\n\n🔑 Digite o *CÓDIGO da sua Imobiliária* (ex: 101, 102, 103...):\n\n_(💡 Se a sua imobiliária ainda não tem código, digite *CADASTRE* para criar o código da sua imobiliária)_" 
+            text: "👋 *Olá! Bem-vindo ao Sistema de Cadastro de Propostas.*\n\n🏢 Por favor, digite o *Nome da sua Imobiliária* (ex: Bons Dias, Imobiliária King...):" 
           });
           return;
         }
 
-        // 2. GATILHO GLOBAL DE EDIÇÃO / CORREÇÃO ("CORRIGIR", "EDITAR", "ALTERAR")
+        // 2. COMANDO GLOBAL DE CORREÇÃO ("CORRIGIR", "EDITAR", "ALTERAR")
         if ((textLow === 'corrigir' || textLow === 'editar' || textLow === 'alterar') && session.step !== 'SELECIONANDO_CAMPO_EDICAO' && !session.step.startsWith('EDITANDO_')) {
           session.previousStep = session.step;
           session.step = 'SELECIONANDO_CAMPO_EDICAO';
           
           await sock.sendMessage(from, { 
-            text: `✏️ *QUAL DADO VOCÊ DESEJA CORRIGIR?*\n\n1️⃣ Nome do Cliente (Proponente 1)\n2️⃣ CPF do Proponente 1\n3️⃣ Telefone do Proponente 1\n4️⃣ Banco Escolhido\n5️⃣ Nome da Imobiliária\n\n0️⃣ Cancelar e Continuar de onde parei\n\n_(Responda digitando o número correspondente)_` 
+            text: `✏️ *QUAL DADO VOCÊ DESEJA CORRIGIR?*\n\n1️⃣ Nome da Imobiliária\n2️⃣ Nome do Cliente (Proponente 1)\n3️⃣ CPF do Proponente 1\n4️⃣ Telefone do Proponente 1\n5️⃣ Banco Escolhido\n\n0️⃣ Cancelar e Continuar de onde parei\n\n_(Responda digitando o número correspondente)_` 
           });
           return;
         }
 
-        // 3. FLUXO DE PROCESSAMENTO DE EDIÇÃO
+        // 3. PROCESSAMENTO DE EDIÇÃO
         if (session.step === 'SELECIONANDO_CAMPO_EDICAO') {
           switch (text) {
             case '1':
+              session.step = 'EDITANDO_IMOBILIARIA';
+              await sock.sendMessage(from, { text: "🏢 Digite o *NOVO Nome da Imobiliária*:" });
+              return;
+            case '2':
               session.step = 'EDITANDO_NOME_PROP1';
               await sock.sendMessage(from, { text: "👤 Digite o *NOVO Nome do Cliente (Proponente 1)*:" });
               return;
-            case '2':
+            case '3':
               session.step = 'EDITANDO_CPF_PROP1';
               await sock.sendMessage(from, { text: "💳 Digite o *NOVO CPF do Proponente 1*:" });
               return;
-            case '3':
+            case '4':
               session.step = 'EDITANDO_TEL_PROP1';
               await sock.sendMessage(from, { text: "📱 Digite o *NOVO Telefone do Proponente 1*:" });
               return;
-            case '4':
+            case '5':
               session.step = 'EDITANDO_BANCO';
               await sock.sendMessage(from, { text: "🏦 Selecione o *NOVO Banco*:\n\n1️⃣ Itaú\n2️⃣ Caixa Econômica\n3️⃣ Bradesco\n4️⃣ Santander\n5️⃣ Banco do Brasil" });
-              return;
-            case '5':
-              session.step = 'AGUARDANDO_CODIGO_OU_CADASTRO';
-              await sock.sendMessage(from, { text: "🔑 Digite o *NOVO CÓDIGO da Imobiliária*:" });
               return;
             case '0':
             default:
@@ -154,6 +136,10 @@ async function startWhatsAppBot() {
 
         if (session.step.startsWith('EDITANDO_')) {
           switch (session.step) {
+            case 'EDITANDO_IMOBILIARIA':
+              session.imobiliaria = text;
+              await sock.sendMessage(from, { text: `✅ Imobiliária atualizada para: *${text}*` });
+              break;
             case 'EDITANDO_NOME_PROP1':
               session.nomeCliente1 = text;
               await sock.sendMessage(from, { text: `✅ Nome atualizado para: *${text}*` });
@@ -180,80 +166,16 @@ async function startWhatsAppBot() {
         // 4. MÁQUINA DE ESTADOS PRINCIPAL
         switch (session.step) {
 
-          case 'AGUARDANDO_CODIGO_OU_CADASTRO':
-            if (['olá', 'ola', 'oi', 'oii', 'boa tarde', 'bom dia', 'boa noite'].includes(textLow)) {
-              await sock.sendMessage(from, { 
-                text: "👋 Olá! Por favor, digite o *CÓDIGO da sua Imobiliária* (ex: 101, 102...) ou digite *CADASTRE* para registrar nova imobiliária." 
-              });
-              return;
-            }
-
-            if (['cadastre', 'cadastro', 'cadastrar', 'novo cadastro', 'nova imobiliaria', '2'].includes(textLow)) {
-              session.step = 'CADASTRO_IMOB_NOME';
-              await sock.sendMessage(from, { text: "🏢 *CADASTRO DE NOVA IMOBILIÁRIA*\n\nDigite o *Nome da Imobiliária*:" });
-              return;
-            }
-
-            await sock.sendMessage(from, { text: "⏳ *Verificando código da imobiliária...*" });
-            const busca = await verificarCodigoImobiliaria(text);
-
-            if (busca.valido) {
-              session.imobiliaria = busca.imobiliaria;
-              session.codigoImobiliaria = busca.codigo;
-              session.errosCodigo = 0;
-              session.step = 'AGUARDANDO_NOME_PROP1';
-
-              await sock.sendMessage(from, { 
-                text: `✅ Imobiliária identificada: *${busca.imobiliaria}* (Código: ${busca.codigo})\n\nAgora, digite o *Nome Completo do Cliente (Proponente 1)*:` 
-              });
-            } else {
-              session.errosCodigo = (session.errosCodigo || 0) + 1;
-
-              if (session.errosCodigo >= 2) {
-                delete sessions[from];
-                await sock.sendMessage(from, { 
-                  text: `⚠️ Código *"${text}"* incorreto.\n\n🔄 *Você errou o código 2 vezes.* A conversa foi reiniciada automaticamente.\n\nPara começar novamente, digite o código correto ou digite *CADASTRE* para criar sua imobiliária.` 
-                });
-              } else {
-                await sock.sendMessage(from, { 
-                  text: `⚠️ Código *"${text}"* não foi encontrado. *(Tentativa ${session.errosCodigo} de 2)*\n\n👉 Digite o código correto (ex: 101, 102...)\n👉 Ou digite *CADASTRE* para criar o código da sua imobiliária.` 
-                });
-              }
-            }
+          // PASSO 0: DIGITAR O NOME DA IMOBILIÁRIA DIRETO
+          case 'AGUARDANDO_NOME_IMOBILIARIA':
+            session.imobiliaria = text;
+            session.step = 'AGUARDANDO_NOME_PROP1';
+            await sock.sendMessage(from, { 
+              text: `✅ Imobiliária: *${text}*\n\n👤 Agora, digite o *Nome Completo do Cliente (Proponente 1)*:` 
+            });
             break;
 
-          case 'CADASTRO_IMOB_NOME':
-            session.novoImobNome = text;
-            session.step = 'CADASTRO_IMOB_TEL';
-            await sock.sendMessage(from, { text: `📱 Digite o *Telefone / Celular da Imobiliária* ${text}:` });
-            break;
-
-          case 'CADASTRO_IMOB_TEL':
-            session.novoImobTel = text;
-            session.step = 'CADASTRO_IMOB_BAIRRO';
-            await sock.sendMessage(from, { text: "📍 Digite o *Bairro da Imobiliária*:" });
-            break;
-
-          case 'CADASTRO_IMOB_BAIRRO':
-            session.novoImobBairro = text;
-            await sock.sendMessage(from, { text: "⏳ *Cadastrando imobiliária e gerando código exclusivo...*" });
-
-            const novaiMob = await cadastrarNovaImobiliaria(session.novoImobNome, session.novoImobTel, session.novoImobBairro);
-
-            if (novaiMob && novaiMob.codigo) {
-              session.imobiliaria = novaiMob.imobiliaria;
-              session.codigoImobiliaria = novaiMob.codigo;
-              session.step = 'AGUARDANDO_NOME_PROP1';
-
-              await sock.sendMessage(from, { 
-                text: `🎉 *IMOBILIÁRIA CADASTRADA COM SUCESSO!*\n\n🏢 *Nome:* ${novaiMob.imobiliaria}\n🔑 *SEU CÓDIGO EXCLUSIVO:* *${novaiMob.codigo}*\n\n_(Guarde este código para os próximos cadastros!)_\n\n--- Agora vamos cadastrar o cliente ---\n\nDigite o *Nome Completo do Cliente (Proponente 1)*:` 
-              });
-            } else {
-              await sock.sendMessage(from, { text: "⚠️ Erro ao cadastrar a imobiliária. Tente novamente digitando *inicio*." });
-              delete sessions[from];
-            }
-            break;
-
+          // CADASTRO DO PROPONENTE 1
           case 'AGUARDANDO_NOME_PROP1':
             session.nomeCliente1 = text;
             session.step = 'AGUARDANDO_CPF_PROP1';
@@ -327,7 +249,7 @@ async function startWhatsAppBot() {
           case 'AGUARDANDO_NOME_PROP2':
             session.nomeCliente2 = text;
             session.step = 'AGUARDANDO_CPF_PROP2';
-            await sock.sendMessage(from, { text: "Digite o *Nome Completo do 2º Proponente*:" });
+            await sock.sendMessage(from, { text: "Digite o *CPF do 2º Proponente*:" });
             break;
 
           case 'AGUARDANDO_CPF_PROP2':
