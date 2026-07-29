@@ -1,6 +1,6 @@
 /**
  * ROBÔ DE WHATSAPP - CORRESPONDENTE BANCÁRIO (RECEITA DE BANCO)
- * Com Bloco de Revisão Final, Edição por Cópia/Cola e Bloco de Observações
+ * Com Self-Ping Interno 24/7 + Bloco de Revisão Final + Bloco de Observações
  */
 
 const express = require('express');
@@ -32,12 +32,23 @@ const BANCOS_LISTA = ["Itaú", "Caixa Econômica", "Bradesco", "Santander", "Ban
 
 app.use(express.json());
 
+// ⏰ SELF-PING INTERNO: Mantém o servidor do Render acordado enviando requisições a cada 4 minutos
+setInterval(async () => {
+  try {
+    const renderUrl = process.env.RENDER_EXTERNAL_URL || "https://whatsapp-crm-correspondente.onrender.com";
+    await axios.get(renderUrl);
+    console.log("⏰ Self-ping enviado para manter o robô 24/7 online!");
+  } catch (err) {
+    console.log("Self-ping notice:", err.message);
+  }
+}, 4 * 60 * 1000);
+
 app.get('/', async (req, res) => {
   if (isConnected) {
     return res.send(`
       <!DOCTYPE html><html><head><title>WhatsApp Bot - Conectado</title><meta charset="utf-8">
       <style>body { font-family: Arial; text-align: center; padding: 50px; background: #eef2f5; } .card { background: white; padding: 30px; border-radius: 12px; display: inline-block; box-shadow: 0 4px 12px rgba(0,0,0,0.1); } .status { color: #2e7d32; font-weight: bold; font-size: 24px; }</style></head>
-      <body><div class="card"><h1>🤖 Robô WhatsApp Correspondente</h1><p class="status">✅ STATUS: CONECTADO E RODANDO!</p><p>O robô está ativo e pronto para receber propostas das imobiliárias.</p></div></body></html>
+      <body><div class="card"><h1>🤖 Robô WhatsApp Correspondente</h1><p class="status">✅ STATUS: CONECTADO E RODANDO 24/7!</p><p>O robô está ativo e pronto para receber propostas das imobiliárias.</p></div></body></html>
     `);
   }
   if (!currentQRCodeData) {
