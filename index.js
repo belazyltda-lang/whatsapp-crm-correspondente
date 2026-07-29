@@ -1,6 +1,6 @@
 /**
  * ROBÔ DE WHATSAPP - CORRESPONDENTE BANCÁRIO (RECEITA DE BANCO)
- * Versão 100% Corrigida (Com downloadMediaMessage Importado)
+ * Versão Blindada e Estável (Com Logger Silencioso e Autocorreção Baileys)
  */
 
 const express = require('express');
@@ -28,6 +28,17 @@ const BANCOS_LISTA = ["Itaú", "Caixa Econômica", "Bradesco", "Santander", "Ban
 
 app.use(express.json());
 
+// Logger silencioso para o Baileys não travar a saída no Render
+const createMockLogger = () => {
+  const dummy = () => {};
+  const logger = {
+    level: 'silent',
+    trace: dummy, debug: dummy, info: dummy, warn: dummy, error: dummy, fatal: dummy,
+    child: () => logger
+  };
+  return logger;
+};
+
 // ⏰ SELF-PING INTERNO (A cada 4 minutos)
 setInterval(async () => {
   try {
@@ -43,9 +54,11 @@ app.get('/logout', async (req, res) => {
     currentQRCodeData = "";
     if (sock) { try { sock.logout(); sock.end(); } catch(e){} }
     const authFolder = path.join(__dirname, 'auth_info');
-    if (fs.existsSync(authFolder)) fs.rmSync(authFolder, { recursive: true, force: true });
-    setTimeout(startWhatsAppBot, 2000);
-    res.send(`<!DOCTYPE html><html><head><title>Resetando...</title><meta http-equiv="refresh" content="4;url=/"></head><body style="font-family:Arial;text-align:center;padding:50px;"><h2>🔄 Sessão resetada! Gerando novo QR Code...</h2></body></html>`);
+    if (fs.existsSync(authFolder)) {
+      try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e){}
+    }
+    setTimeout(startWhatsAppBot, 1500);
+    res.send(`<!DOCTYPE html><html><head><title>Resetando...</title><meta http-equiv="refresh" content="4;url=/"></head><body style="font-family:Arial;text-align:center;padding:50px;"><h2>🔄 Sessão resetada! Gerando novo QR Code em 5 segundos...</h2></body></html>`);
   } catch (err) { res.send("Erro reset: " + err.message); }
 });
 
@@ -78,11 +91,11 @@ app.get('/', async (req, res) => {
     return res.send(`<!DOCTYPE html><html><head><title>Bot Conectado</title><meta charset="utf-8"><style>body{font-family:Arial;text-align:center;padding:50px;background:#eef2f5;}.card{background:white;padding:30px;border-radius:12px;display:inline-block;box-shadow:0 4px 12px rgba(0,0,0,0.1);}.status{color:#2e7d32;font-weight:bold;font-size:24px;}.btn{display:inline-block;margin-top:20px;padding:10px 20px;background:#d32f2f;color:white;text-decoration:none;border-radius:6px;font-weight:bold;}</style></head><body><div class="card"><h1>🤖 Robô WhatsApp Correspondente</h1><p class="status">✅ STATUS: CONECTADO E RODANDO 24/7!</p><p>O robô está ativo e pronto para receber propostas.</p><a href="/logout" class="btn">🔄 Resetar Sessão / Novo QR Code</a></div></body></html>`);
   }
   if (!currentQRCodeData) {
-    return res.send(`<!DOCTYPE html><html><head><title>Carregando...</title><meta http-equiv="refresh" content="3"></head><body style="font-family:Arial;text-align:center;padding:50px;"><h2>⏳ Gerando QR Code...</h2></body></html>`);
+    return res.send(`<!DOCTYPE html><html><head><title>Carregando...</title><meta http-equiv="refresh" content="3"></head><body style="font-family:Arial;text-align:center;padding:50px;"><h2>⏳ Gerando QR Code...</h2><p>Se demorar mais de 10s, <a href="/logout">clique aqui para resetar</a>.</p></body></html>`);
   }
   try {
     const qrImage = await QRCode.toDataURL(currentQRCodeData);
-    res.send(`<!DOCTYPE html><html><head><title>Conectar Bot</title><meta charset="utf-8"><meta http-equiv="refresh" content="12"><style>body{font-family:Arial;text-align:center;padding:30px;background:#f4f6f8;}.card{background:white;padding:30px;border-radius:16px;display:inline-block;}img{margin:20px 0;border:4px solid #128c7e;border-radius:12px;}</style></head><body><div class="card"><h2>📱 Conectar Robô ao WhatsApp</h2><img src="${qrImage}" width="280" /></div></body></html>`);
+    res.send(`<!DOCTYPE html><html><head><title>Conectar Bot</title><meta charset="utf-8"><meta http-equiv="refresh" content="12"><style>body{font-family:Arial;text-align:center;padding:30px;background:#f4f6f8;}.card{background:white;padding:30px;border-radius:16px;display:inline-block;}img{margin:20px 0;border:4px solid #128c7e;border-radius:12px;}</style></head><body><div class="card"><h2>📱 Conectar Robô ao WhatsApp</h2><img src="${qrImage}" width="280" /><br/><a href="/logout" style="color:#d32f2f;font-weight:bold;text-decoration:none;">🔄 Gerar outro QR Code</a></div></body></html>`);
   } catch (err) { res.status(500).send("Erro QR Code"); }
 });
 
@@ -138,9 +151,10 @@ async function startWhatsAppBot() {
 
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
-    console.log("🚀 Iniciando Baileys WhatsApp...");
+    console.log("🚀 Iniciando Baileys WhatsApp com Logger Silencioso...");
     sock = makeWASocket({ 
       auth: state, 
+      logger: createMockLogger(),
       printQRInTerminal: true, 
       browser: ['CRM-Correspondente', 'Chrome', '1.0.0'],
       syncFullHistory: false 
@@ -153,7 +167,7 @@ async function startWhatsAppBot() {
       if (qr) { 
         currentQRCodeData = qr; 
         isConnected = false; 
-        console.log("✅ QR Code gerado!");
+        console.log("✅ QR Code gerado com sucesso!");
       }
       if (connection === 'open') { 
         isConnected = true; 
@@ -166,7 +180,7 @@ async function startWhatsAppBot() {
         console.log(`⚠️ Conexão fechada (${statusCode}).`);
 
         if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403 || statusCode === 408 || statusCode === 428) {
-          console.log("🔄 Sessão expirada/inválida. Limpando credenciais...");
+          console.log("🔄 Sessão expirada/inválida. Limpando credenciais para gerar novo QR Code...");
           if (fs.existsSync(authFolder)) {
             try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e){}
           }
