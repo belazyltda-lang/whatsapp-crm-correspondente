@@ -1,6 +1,6 @@
 /**
  * ROBÔ DE WHATSAPP - CORRESPONDENTE BANCÁRIO (RECEITA DE BANCO)
- * Busca por Nome de Imobiliária + Cadastro de Novas Imobiliárias
+ * Busca por Nome de Imobiliária + Cadastro de Novas Imobiliárias (Mapeamento Corrigido)
  */
 
 const express = require('express');
@@ -62,7 +62,12 @@ async function verificarNomeImobiliaria(nome) {
 async function cadastrarNovaImobiliaria(nome, telefone, bairro) {
   try {
     const resp = await axios.post(GOOGLE_WEBHOOK_URL, { action: "cadastrarImobiliaria", nome: nome, telefone: telefone, bairro: bairro });
-    if (resp.data && resp.data.nome) return resp.data;
+    if (resp.data && (resp.data.imobiliaria || resp.data.nome)) {
+      return {
+        nome: resp.data.imobiliaria || resp.data.nome,
+        codigo: resp.data.codigo
+      };
+    }
   } catch (err) { console.error("Erro cadastrar imob:", err.message); }
   return null;
 }
