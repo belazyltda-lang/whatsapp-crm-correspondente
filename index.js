@@ -5,7 +5,7 @@
 const express = require('express');
 const QRCode = require('qrcode');
 const axios = require('axios');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, Browsers } = require('@whiskeysockets/baileys');
 const path = require('path');
 const fs = require('fs');
 
@@ -113,7 +113,15 @@ async function startWhatsAppBot() {
   try {
     if (!fs.existsSync(authFolder)) fs.mkdirSync(authFolder, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
-    sock = makeWASocket({ auth: state, logger: mockLogger, printQRInTerminal: false, browser: ['CRM-Correspondente', 'Chrome', '1.0.0'], syncFullHistory: false });
+    sock = makeWASocket({ 
+      auth: state, 
+      logger: mockLogger, 
+      printQRInTerminal: false, 
+      browser: Browsers.windows('Desktop'),
+      syncFullHistory: false,
+      connectTimeoutMs: 60000,
+      getMessage: async () => ({ conversation: '' })
+    });
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
@@ -123,8 +131,10 @@ async function startWhatsAppBot() {
       if (connection === 'close') {
         isConnected = false;
         const statusCode = lastDisconnect?.error?.output?.statusCode;
-        console.log('Conexão fechada. StatusCode:', statusCode);
-        if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403 || statusCode === 408 || statusCode === 428) {
+        console.log('Conexão fechada. StatusCode:', statusCode, '| Tinha QR?', !!currentQRCodeData);
+        // Se nunca gerou QR ou sessão inválida, limpa auth e começa do zero
+        if (!currentQRCodeData || statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403 || statusCode === 408 || statusCode === 428) {
+          console.log('🗑️ Limpando auth_info para gerar novo QR...');
           if (fs.existsSync(authFolder)) { try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e){} }
         }
         setTimeout(startWhatsAppBot, 3000);
