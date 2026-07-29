@@ -1,8 +1,15 @@
+// Fix: crypto polyfill para Node.js < 19
+if (!globalThis.crypto) {
+  const { webcrypto } = require('crypto');
+  globalThis.crypto = webcrypto;
+}
+
 const express = require('express');
 const QRCode = require('qrcode');
 const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const path = require('path');
 const fs = require('fs');
+
 
 const app = express();
 const PORT = process.env.PORT || 3000;
