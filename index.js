@@ -1,6 +1,6 @@
 /**
  * ROBÔ DE WHATSAPP - CORRESPONDENTE BANCÁRIO (RECEITA DE BANCO)
- * Com Notificação Automática ao Cliente no Cadastro e Notificações ao Aprovar Proposta
+ * Com Limpeza de Sessão (/logout) + Tratamento Robusto de Eventos Baileys
  */
 
 const express = require('express');
@@ -43,6 +43,32 @@ setInterval(async () => {
   }
 }, 4 * 60 * 1000);
 
+// 🔄 ROTA PARA RESETAR SESSÃO E GERAR NOVO QR CODE SE O WHATSAPP TRAVAR
+app.get('/logout', async (req, res) => {
+  try {
+    isConnected = false;
+    currentQRCodeData = "";
+    if (sock) {
+      try { sock.logout(); } catch(e) {}
+      try { sock.end(); } catch(e) {}
+    }
+    const authFolder = path.join(__dirname, 'auth_info');
+    if (fs.existsSync(authFolder)) {
+      fs.rmSync(authFolder, { recursive: true, force: true });
+    }
+    setTimeout(startWhatsAppBot, 2000);
+    res.send(`
+      <!DOCTYPE html><html><head><title>Resetando Sessão...</title><meta http-equiv="refresh" content="5;url=/"></head>
+      <body style="font-family: Arial; text-align: center; padding: 50px;">
+        <h2>🔄 Sessão desconectada com sucesso!</h2>
+        <p>Aguarde 5 segundos, você será redirecionado para escaneiar o novo QR Code...</p>
+      </body></html>
+    `);
+  } catch (err) {
+    res.send("Erro ao resetar: " + err.message);
+  }
+});
+
 // 🔔 ENDPOINT DE NOTIFICAÇÃO DE APROVAÇÃO (Disparado pelo Google Sheets ao mudar Status para Aprovado)
 app.post('/notificar-aprovacao', async (req, res) => {
   try {
@@ -61,7 +87,7 @@ app.post('/notificar-aprovacao', async (req, res) => {
       }).catch(err => console.error("Erro mensagem imob aprovação:", err));
     }
 
-    // Pequena pausa de 1.5s entre envios para segurança da API
+    // Pausa de 1.5s entre envios
     await new Promise(resolve => setTimeout(resolve, 1500));
 
     // 2. Mensagem para o Cliente Final (Proponente 1)
@@ -83,8 +109,8 @@ app.get('/', async (req, res) => {
   if (isConnected) {
     return res.send(`
       <!DOCTYPE html><html><head><title>WhatsApp Bot - Conectado</title><meta charset="utf-8">
-      <style>body { font-family: Arial; text-align: center; padding: 50px; background: #eef2f5; } .card { background: white; padding: 30px; border-radius: 12px; display: inline-block; box-shadow: 0 4px 12px rgba(0,0,0,0.1); } .status { color: #2e7d32; font-weight: bold; font-size: 24px; }</style></head>
-      <body><div class="card"><h1>🤖 Robô WhatsApp Correspondente</h1><p class="status">✅ STATUS: CONECTADO E RODANDO 24/7!</p><p>O robô está ativo e pronto para receber propostas das imobiliárias.</p></div></body></html>
+      <style>body { font-family: Arial; text-align: center; padding: 50px; background: #eef2f5; } .card { background: white; padding: 30px; border-radius: 12px; display: inline-block; box-shadow: 0 4px 12px rgba(0,0,0,0.1); } .status { color: #2e7d32; font-weight: bold; font-size: 24px; } .btn-logout { display: inline-block; margin-top: 20px; padding: 10px 20px; background: #d32f2f; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; }</style></head>
+      <body><div class="card"><h1>🤖 Robô WhatsApp Correspondente</h1><p class="status">✅ STATUS: CONECTADO E RODANDO 24/7!</p><p>O robô está ativo e pronto para receber propostas das imobiliárias.</p><a href="/logout" class="btn-logout">🔄 Reconectar / Novo QR Code</a></div></body></html>
     `);
   }
   if (!currentQRCodeData) {
@@ -202,30 +228,56 @@ async function startWhatsAppBot() {
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
     const { version } = await fetchLatestBaileysVersion();
 
-    sock = makeWASocket({ version, auth: state, printQRInTerminal: true, browser: Browsers.ubuntu('Chrome'), generateHighQualityLinkPreview: true });
+    sock = makeWASocket({ 
+      version, 
+      auth: state, 
+      printQRInTerminal: true, 
+      browser: Browsers.ubuntu('Chrome'), 
+      generateHighQualityLinkPreview: true,
+      syncFullHistory: false
+    });
+
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
       if (qr) { currentQRCodeData = qr; isConnected = false; }
-      if (connection === 'open') { isConnected = true; currentQRCodeData = ""; }
+      if (connection === 'open') { 
+        isConnected = true; 
+        currentQRCodeData = ""; 
+        console.log("✅ WHATSAPP CONECTADO COM SUCESSO!");
+      }
       if (connection === 'close') {
         isConnected = false;
         const statusCode = lastDisconnect?.error?.output?.statusCode;
+        console.log(`⚠️ Conexão fechada (Código ${statusCode}). Reconectando em 3s...`);
         if (statusCode !== DisconnectReason.loggedOut) setTimeout(startWhatsAppBot, 3000);
       }
     });
 
     sock.ev.on('messages.upsert', async (m) => {
       try {
+        if (!m.messages || m.messages.length === 0) return;
         const msg = m.messages[0];
-        if (!msg || msg.key.fromMe || !msg.message) return;
+        if (!msg || !msg.message) return;
+        
         const from = msg.key.remoteJid;
-        if (from.endsWith('@g.us')) return;
+        if (!from || from.endsWith('@g.us') || from === 'status@broadcast') return;
 
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || "").trim();
+        const text = (
+          msg.message.conversation || 
+          msg.message.extendedTextMessage?.text || 
+          msg.message.imageMessage?.caption || 
+          msg.message.documentMessage?.caption || ""
+        ).trim();
+
+        console.log(`📩 [${from}] Mensagem recebida: "${text}" (fromMe: ${msg.key.fromMe})`);
+
+        if (msg.key.fromMe) {
+          return;
+        }
+
         const textLow = text.toLowerCase();
-
         let session = sessions[from];
 
         // 1. REINICIAR CONVERSA / SAUDAÇÃO INICIAL
@@ -333,199 +385,3 @@ async function startWhatsAppBot() {
 
             const blocoEdicao = gerarTextoCopiaEdicao(session);
             await sock.sendMessage(from, { text: blocoEdicao });
-            return;
-          }
-        }
-
-        // 5. MÁQUINA DE ESTADOS PRINCIPAL
-        switch (session.step) {
-
-          case 'AGUARDANDO_NOME_IMOBILIARIA':
-            if (['cadastro', 'cadastre', 'cadastrar', 'novo cadastro', 'nova imobiliaria'].includes(textLow)) {
-              session.step = 'CADASTRO_IMOB_NOME';
-              await sock.sendMessage(from, { text: "🏢 *CADASTRO DE NOVA IMOBILIÁRIA*\n\nDigite o *Nome da Imobiliária*:" });
-              return;
-            }
-
-            await sock.sendMessage(from, { text: "⏳ *Verificando imobiliária na planilha...*" });
-            const busca = await verificarNomeImobiliaria(text);
-
-            if (busca.valido) {
-              session.imobiliaria = busca.imobiliaria;
-              session.step = 'AGUARDANDO_NOME_PROP1';
-
-              await sock.sendMessage(from, { 
-                text: `✅ Imobiliária encontrada: *${busca.imobiliaria}*\n\nDigite o *Nome Completo do Cliente (Proponente 1)*:` 
-              });
-            } else {
-              await sock.sendMessage(from, { 
-                text: `⚠️ Imobiliária *"${text}"* não foi encontrada na nossa planilha de cadastros.\n\n👉 Verifique se digitou o nome corretamente.\n👉 Ou digite *CADASTRO* para realizar o cadastro da sua imobiliária.` 
-              });
-            }
-            break;
-
-          case 'CADASTRO_IMOB_NOME':
-            session.novoImobNome = text;
-            session.step = 'CADASTRO_IMOB_TEL';
-            await sock.sendMessage(from, { text: `📱 Digite o *Telefone / Celular da Imobiliária* ${text}:` });
-            break;
-
-          case 'CADASTRO_IMOB_TEL':
-            session.novoImobTel = text;
-            session.step = 'CADASTRO_IMOB_BAIRRO';
-            await sock.sendMessage(from, { text: "📍 Digite o *Bairro da Imobiliária*:" });
-            break;
-
-          case 'CADASTRO_IMOB_BAIRRO':
-            session.novoImobBairro = text;
-            await sock.sendMessage(from, { text: "⏳ *Cadastrando imobiliária na planilha...*" });
-
-            const novaiMob = await cadastrarNovaImobiliaria(session.novoImobNome, session.novoImobTel, session.novoImobBairro);
-
-            if (novaiMob && novaiMob.nome) {
-              session.imobiliaria = novaiMob.nome;
-              session.step = 'AGUARDANDO_NOME_PROP1';
-
-              await sock.sendMessage(from, { 
-                text: `🎉 *CADASTRO REALIZADO COM SUCESSO!*\n\n🏢 *Imobiliária:* ${novaiMob.nome}\n\n--- Agora vamos cadastrar a proposta ---\n\nDigite o *Nome Completo do Cliente (Proponente 1)*:` 
-              });
-            } else {
-              await sock.sendMessage(from, { text: "⚠️ *FALHA AO CADASTRAR A IMOBILIÁRIA.*\nPor favor, tente novamente digitando *inicio*." });
-              delete sessions[from];
-            }
-            break;
-
-          case 'AGUARDANDO_NOME_PROP1':
-            session.nomeCliente1 = text;
-            session.step = 'AGUARDANDO_CPF_PROP1';
-            await sock.sendMessage(from, { text: `👤 Cliente: *${text}*\n\nDigite o *CPF do Proponente 1*:` });
-            break;
-
-          case 'AGUARDANDO_CPF_PROP1':
-            session.cpf1 = text;
-            session.step = 'AGUARDANDO_TEL_PROP1';
-            await sock.sendMessage(from, { text: `💳 CPF: *${text}*\n\nDigite o *Telefone do Proponente 1* (com DDD):` });
-            break;
-
-          case 'AGUARDANDO_TEL_PROP1':
-            session.telefone1 = text.replace(/\D/g, '');
-            session.step = 'AGUARDANDO_BANCO';
-            await sock.sendMessage(from, { text: `📱 Telefone: *${session.telefone1}*\n\nSelecione a *Financeira / Banco desejado*:\n\n1️⃣ Itaú\n2️⃣ Caixa Econômica\n3️⃣ Bradesco\n4️⃣ Santander\n5️⃣ Banco do Brasil\n\n_(Responda de 1 a 5)_` });
-            break;
-
-          case 'AGUARDANDO_BANCO':
-            const idxBanco = parseInt(text) - 1;
-            const bancoEscolhido = BANCOS_LISTA[idxBanco] || text;
-            session.banco = bancoEscolhido;
-            session.step = 'AGUARDANDO_DOCS_PROP1';
-            await sock.sendMessage(from, { text: `🏦 Banco escolhido: *${bancoEscolhido}*\n\n📷 Por favor, envie as *fotos ou PDFs dos documentos* do Proponente 1 (RG/CNH, Renda, Endereço, Certidão).\n\nQuando terminar de enviar todas as fotos, digite *PRONTO*.` });
-            break;
-
-          case 'AGUARDANDO_DOCS_PROP1':
-            if (msg.message.imageMessage || msg.message.documentMessage) {
-              try {
-                const buffer = await downloadMediaMessage(msg, 'buffer');
-                const base64 = buffer.toString('base64');
-                const mimeType = msg.message.imageMessage?.mimetype || msg.message.documentMessage?.mimetype || "image/jpeg";
-                const fileName = `doc_${Date.now()}.${mimeType.includes('pdf') ? 'pdf' : 'jpg'}`;
-
-                session.documentos.push({ nomeArquivo: fileName, mimeType: mimeType, base64: base64 });
-                await sock.sendMessage(from, { text: `✅ Documento (${session.documentos.length}) recebido com sucesso!` });
-              } catch (e) {
-                await sock.sendMessage(from, { text: "⚠️ Erro ao baixar o arquivo, por favor reenvie." });
-              }
-              return;
-            }
-
-            if (text.toLowerCase() === 'pronto') {
-              session.step = 'PERGUNTA_PROP2';
-              await sock.sendMessage(from, { text: `✅ *${session.documentos.length} documento(s)* salvos para o Proponente 1.\n\n❓ *Existe mais um proponente nesta proposta?*\n\n1️⃣ SIM\n2️⃣ NÃO` });
-            } else {
-              await sock.sendMessage(from, { text: "Envie mais fotos ou digite *PRONTO* para prosseguir." });
-            }
-            break;
-
-          case 'PERGUNTA_PROP2':
-            if (text === '1' || text.toLowerCase() === 'sim' || text.toLowerCase() === 's') {
-              session.temProp2 = true;
-              session.step = 'AGUARDANDO_NOME_PROP2';
-              await sock.sendMessage(from, { text: "Digite o *Nome Completo do 2º Proponente*:" });
-            } else {
-              session.temProp2 = false;
-              session.step = 'AGUARDANDO_COMPRA_VENDA';
-              await sock.sendMessage(from, { text: "📌 *ETAPA 2: DADOS DO IMÓVEL*\n\nDigite o *Valor de Compra e Venda* (ex: 500.000):" });
-            }
-            break;
-
-          case 'AGUARDANDO_NOME_PROP2':
-            session.nomeCliente2 = text;
-            session.step = 'AGUARDANDO_CPF_PROP2';
-            await sock.sendMessage(from, { text: "Digite o *CPF do 2º Proponente*:" });
-            break;
-
-          case 'AGUARDANDO_CPF_PROP2':
-            session.cpf2 = text;
-            session.step = 'AGUARDANDO_TEL_PROP2';
-            await sock.sendMessage(from, { text: "Digite o *Telefone do 2º Proponente*:" });
-            break;
-
-          case 'AGUARDANDO_TEL_PROP2':
-            session.telefone2 = text.replace(/\D/g, '');
-            session.step = 'AGUARDANDO_COMPRA_VENDA';
-            await sock.sendMessage(from, { text: "📌 *ETAPA 2: DADOS DO IMÓVEL*\n\nDigite o *Valor de Compra e Venda* (ex: 500.000):" });
-            break;
-
-          case 'AGUARDANDO_COMPRA_VENDA':
-            session.valorCompraVenda = text;
-            session.step = 'AGUARDANDO_FINANCIAMENTO';
-            await sock.sendMessage(from, { text: "Digite o *Valor do Financiamento necessário* (ex: 400.000):" });
-            break;
-
-          case 'AGUARDANDO_FINANCIAMENTO':
-            session.valorFinanciamento = text;
-            session.step = 'AGUARDANDO_ENTRADA';
-            await sock.sendMessage(from, { text: "Digite o *Valor da Entrada* (ex: 100.000):" });
-            break;
-
-          case 'AGUARDANDO_ENTRADA':
-            session.valorEntrada = text;
-            session.step = 'AGUARDANDO_OBSERVACAO';
-            await sock.sendMessage(from, { 
-              text: "📝 *Gostaria de adicionar alguma observação a esta proposta?*\n\n1️⃣ NÃO\n2️⃣ SIM (digite sua observação na próxima resposta)" 
-            });
-            break;
-
-          case 'AGUARDANDO_OBSERVACAO':
-            if (text === '1' || textLow === 'nao' || textLow === 'não') {
-              session.observacao = "Nenhuma";
-            } else if (text === '2') {
-              await sock.sendMessage(from, { text: "Por favor, digite a sua *observação*:" });
-              session.step = 'DIGITANDO_OBSERVACAO_TEXTO';
-              return;
-            } else {
-              session.observacao = text;
-            }
-            await enviarResumoConfirmacao(from, session);
-            break;
-
-          case 'DIGITANDO_OBSERVACAO_TEXTO':
-            session.observacao = text;
-            await enviarResumoConfirmacao(from, session);
-            break;
-        }
-
-      } catch (e) { console.error("Erro mensagem:", e); }
-    });
-
-  } catch (err) {
-    console.error("Erro inicialização Baileys:", err);
-    setTimeout(startWhatsAppBot, 5000);
-  }
-
-  return sock;
-}
-
-app.listen(PORT, () => {
-  console.log(`🌐 Servidor rodando na porta ${PORT}`);
-  startWhatsAppBot();
-});
