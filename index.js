@@ -1,6 +1,6 @@
 /**
  * ROBÔ DE WHATSAPP - CORRESPONDENTE BANCÁRIO
- * Com Limite de 2 Erros de Código (Reinício Automático) + Comando CORRIGIR
+ * Com Webhook Atualizado + Privacidade + 2 Erros Max + Comando CORRIGIR
  */
 
 const express = require('express');
@@ -20,8 +20,8 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// URL do seu Webhook do Google Apps Script
-const GOOGLE_WEBHOOK_URL = process.env.GOOGLE_WEBHOOK_URL || "https://script.google.com/macros/s/AKfycbymTSNpTAlNRfqgG78Csl36sIBRIUcPk_GwPqUkV0qq0TW3G4W864INaSCHlndFRXUp/exec";
+// URL DO NOVO WEBHOOK PUBLICADO DO GOOGLE APPS SCRIPT
+const GOOGLE_WEBHOOK_URL = process.env.GOOGLE_WEBHOOK_URL || "https://script.google.com/macros/s/AKfycbyiAvghPgf9ONIyxWDG2WVVCU1Zpuy7MFtwJQxXakdVlHdpE7PH0IvnzefGzjZlwT40/exec";
 
 let currentQRCodeData = "";
 let isConnected = false;
