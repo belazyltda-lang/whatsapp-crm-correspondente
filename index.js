@@ -1,339 +1,295 @@
 /**
- * ROBÔ DE WHATSAPP - CORRESPONDENTE BANCÁRIO (OPÇÃO 1: NOME DIRETO DA IMOBILIÁRIA)
- * Simples, Seguro, Direto e sem dependência de códigos ou pesquisas externas.
+ * CRM CORRESPONDENTE BANCÁRIO - GOOGLE APPS SCRIPT
+ * Busca por Nome de Imobiliária + Cadastro de Novas Imobiliárias
  */
 
-const express = require('express');
-const QRCode = require('qrcode');
-const axios = require('axios');
-const { 
-  default: makeWASocket, 
-  useMultiFileAuthState, 
-  DisconnectReason,
-  downloadMediaMessage,
-  fetchLatestBaileysVersion,
-  Browsers
-} = require('@whiskeysockets/baileys');
-const path = require('path');
-const fs = require('fs');
+const PASTA_RAIZ_NOME = "Correspondência";
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// URL do Webhook publicado do Google Apps Script
-const GOOGLE_WEBHOOK_URL = process.env.GOOGLE_WEBHOOK_URL || "https://script.google.com/macros/s/AKfycbyiAvghPgf9ONIyxWDG2WVVCU1Zpuy7MFtwJQxXakdVlHdpE7PH0IvnzefGzjZlwT40/exec";
-
-let currentQRCodeData = "";
-let isConnected = false;
-let sock = null;
-
-const sessions = {};
-const BANCOS_LISTA = ["Itaú", "Caixa Econômica", "Bradesco", "Santander", "Banco do Brasil"];
-
-app.use(express.json());
-
-app.get('/', async (req, res) => {
-  if (isConnected) {
-    return res.send(`
-      <!DOCTYPE html><html><head><title>WhatsApp Bot - Conectado</title><meta charset="utf-8">
-      <style>body { font-family: Arial; text-align: center; padding: 50px; background: #eef2f5; } .card { background: white; padding: 30px; border-radius: 12px; display: inline-block; box-shadow: 0 4px 12px rgba(0,0,0,0.1); } .status { color: #2e7d32; font-weight: bold; font-size: 24px; }</style></head>
-      <body><div class="card"><h1>🤖 Robô WhatsApp Correspondente</h1><p class="status">✅ STATUS: CONECTADO E RODANDO!</p><p>O robô está ativo e pronto para receber propostas das imobiliárias.</p></div></body></html>
-    `);
-  }
-  if (!currentQRCodeData) {
-    return res.send(`<!DOCTYPE html><html><head><title>Carregando...</title><meta http-equiv="refresh" content="3"></head><body style="font-family: Arial; text-align: center; padding: 50px;"><h2>⏳ Conectando aos servidores do WhatsApp...</h2></body></html>`);
-  }
-  try {
-    const qrImage = await QRCode.toDataURL(currentQRCodeData);
-    res.send(`<!DOCTYPE html><html><head><title>Conectar Bot</title><meta charset="utf-8"><meta http-equiv="refresh" content="12"><style>body { font-family: Arial; text-align: center; padding: 30px; background: #f4f6f8; } .card { background: white; padding: 30px; border-radius: 16px; display: inline-block; } img { margin: 20px 0; border: 4px solid #128c7e; border-radius: 12px; }</style></head><body><div class="card"><h2>📱 Conectar Robô ao WhatsApp</h2><img src="${qrImage}" width="280" /></div></body></html>`);
-  } catch (err) { res.status(500).send("Erro QR Code"); }
-});
-
-async function startWhatsAppBot() {
-  try {
-    const authFolder = path.join(__dirname, 'auth_info');
-    if (!fs.existsSync(authFolder)) fs.mkdirSync(authFolder, { recursive: true });
-
-    const { state, saveCreds } = await useMultiFileAuthState(authFolder);
-    const { version } = await fetchLatestBaileysVersion();
-
-    sock = makeWASocket({ version, auth: state, printQRInTerminal: true, browser: Browsers.ubuntu('Chrome'), generateHighQualityLinkPreview: true });
-    sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('connection.update', (update) => {
-      const { connection, lastDisconnect, qr } = update;
-      if (qr) { currentQRCodeData = qr; isConnected = false; }
-      if (connection === 'open') { isConnected = true; currentQRCodeData = ""; }
-      if (connection === 'close') {
-        isConnected = false;
-        const statusCode = lastDisconnect?.error?.output?.statusCode;
-        if (statusCode !== DisconnectReason.loggedOut) setTimeout(startWhatsAppBot, 3000);
-      }
-    });
-
-    sock.ev.on('messages.upsert', async (m) => {
-      try {
-        const msg = m.messages[0];
-        if (!msg || msg.key.fromMe || !msg.message) return;
-        const from = msg.key.remoteJid;
-        if (from.endsWith('@g.us')) return;
-
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || "").trim();
-        const textLow = text.toLowerCase();
-
-        let session = sessions[from];
-
-        // 1. REINICIAR CONVERSA
-        if (!session || textLow === 'reiniciar' || textLow === 'menu' || textLow === 'inicio' || textLow === 'cancelar' || textLow === 'sair' || textLow === 'voltar') {
-          sessions[from] = { step: 'AGUARDANDO_NOME_IMOBILIARIA', documentos: [] };
-          await sock.sendMessage(from, { 
-            text: "👋 *Olá! Bem-vindo ao Sistema de Cadastro de Propostas.*\n\n🏢 Por favor, digite o *Nome da sua Imobiliária* (ex: Bons Dias, Imobiliária King...):" 
-          });
-          return;
-        }
-
-        // 2. COMANDO GLOBAL DE CORREÇÃO ("CORRIGIR", "EDITAR", "ALTERAR")
-        if ((textLow === 'corrigir' || textLow === 'editar' || textLow === 'alterar') && session.step !== 'SELECIONANDO_CAMPO_EDICAO' && !session.step.startsWith('EDITANDO_')) {
-          session.previousStep = session.step;
-          session.step = 'SELECIONANDO_CAMPO_EDICAO';
-          
-          await sock.sendMessage(from, { 
-            text: `✏️ *QUAL DADO VOCÊ DESEJA CORRIGIR?*\n\n1️⃣ Nome da Imobiliária\n2️⃣ Nome do Cliente (Proponente 1)\n3️⃣ CPF do Proponente 1\n4️⃣ Telefone do Proponente 1\n5️⃣ Banco Escolhido\n\n0️⃣ Cancelar e Continuar de onde parei\n\n_(Responda digitando o número correspondente)_` 
-          });
-          return;
-        }
-
-        // 3. PROCESSAMENTO DE EDIÇÃO
-        if (session.step === 'SELECIONANDO_CAMPO_EDICAO') {
-          switch (text) {
-            case '1':
-              session.step = 'EDITANDO_IMOBILIARIA';
-              await sock.sendMessage(from, { text: "🏢 Digite o *NOVO Nome da Imobiliária*:" });
-              return;
-            case '2':
-              session.step = 'EDITANDO_NOME_PROP1';
-              await sock.sendMessage(from, { text: "👤 Digite o *NOVO Nome do Cliente (Proponente 1)*:" });
-              return;
-            case '3':
-              session.step = 'EDITANDO_CPF_PROP1';
-              await sock.sendMessage(from, { text: "💳 Digite o *NOVO CPF do Proponente 1*:" });
-              return;
-            case '4':
-              session.step = 'EDITANDO_TEL_PROP1';
-              await sock.sendMessage(from, { text: "📱 Digite o *NOVO Telefone do Proponente 1*:" });
-              return;
-            case '5':
-              session.step = 'EDITANDO_BANCO';
-              await sock.sendMessage(from, { text: "🏦 Selecione o *NOVO Banco*:\n\n1️⃣ Itaú\n2️⃣ Caixa Econômica\n3️⃣ Bradesco\n4️⃣ Santander\n5️⃣ Banco do Brasil" });
-              return;
-            case '0':
-            default:
-              session.step = session.previousStep || 'AGUARDANDO_NOME_PROP1';
-              await sock.sendMessage(from, { text: "👍 Correção cancelada. Continuando o cadastro!" });
-              return;
-          }
-        }
-
-        if (session.step.startsWith('EDITANDO_')) {
-          switch (session.step) {
-            case 'EDITANDO_IMOBILIARIA':
-              session.imobiliaria = text;
-              await sock.sendMessage(from, { text: `✅ Imobiliária atualizada para: *${text}*` });
-              break;
-            case 'EDITANDO_NOME_PROP1':
-              session.nomeCliente1 = text;
-              await sock.sendMessage(from, { text: `✅ Nome atualizado para: *${text}*` });
-              break;
-            case 'EDITANDO_CPF_PROP1':
-              session.cpf1 = text;
-              await sock.sendMessage(from, { text: `✅ CPF atualizado para: *${text}*` });
-              break;
-            case 'EDITANDO_TEL_PROP1':
-              session.telefone1 = text.replace(/\D/g, '');
-              await sock.sendMessage(from, { text: `✅ Telefone atualizado para: *${session.telefone1}*` });
-              break;
-            case 'EDITANDO_BANCO':
-              const idxB = parseInt(text) - 1;
-              session.banco = BANCOS_LISTA[idxB] || text;
-              await sock.sendMessage(from, { text: `✅ Banco atualizado para: *${session.banco}*` });
-              break;
-          }
-          session.step = session.previousStep || 'AGUARDANDO_DOCS_PROP1';
-          await sock.sendMessage(from, { text: "👍 Retornando ao cadastro..." });
-          return;
-        }
-
-        // 4. MÁQUINA DE ESTADOS PRINCIPAL
-        switch (session.step) {
-
-          // PASSO 0: DIGITAR O NOME DA IMOBILIÁRIA DIRETO
-          case 'AGUARDANDO_NOME_IMOBILIARIA':
-            session.imobiliaria = text;
-            session.step = 'AGUARDANDO_NOME_PROP1';
-            await sock.sendMessage(from, { 
-              text: `✅ Imobiliária: *${text}*\n\n👤 Agora, digite o *Nome Completo do Cliente (Proponente 1)*:` 
-            });
-            break;
-
-          // CADASTRO DO PROPONENTE 1
-          case 'AGUARDANDO_NOME_PROP1':
-            session.nomeCliente1 = text;
-            session.step = 'AGUARDANDO_CPF_PROP1';
-            await sock.sendMessage(from, { 
-              text: `👤 Cliente: *${text}*\n\nDigite o *CPF do Proponente 1*:\n\n_(💡 Dica: Se errar qualquer dado, digite **CORRIGIR** a qualquer momento)_` 
-            });
-            break;
-
-          case 'AGUARDANDO_CPF_PROP1':
-            session.cpf1 = text;
-            session.step = 'AGUARDANDO_TEL_PROP1';
-            await sock.sendMessage(from, { 
-              text: `💳 CPF: *${text}*\n\nDigite o *Telefone do Proponente 1* (com DDD):` 
-            });
-            break;
-
-          case 'AGUARDANDO_TEL_PROP1':
-            session.telefone1 = text.replace(/\D/g, '');
-            session.step = 'AGUARDANDO_BANCO';
-            await sock.sendMessage(from, { 
-              text: `📱 Telefone: *${session.telefone1}*\n\nSelecione a *Financeira / Banco desejado*:\n\n1️⃣ Itaú\n2️⃣ Caixa Econômica\n3️⃣ Bradesco\n4️⃣ Santander\n5️⃣ Banco do Brasil\n\n_(Responda de 1 a 5)_` 
-            });
-            break;
-
-          case 'AGUARDANDO_BANCO':
-            const idxBanco = parseInt(text) - 1;
-            const bancoEscolhido = BANCOS_LISTA[idxBanco] || text;
-            session.banco = bancoEscolhido;
-            session.step = 'AGUARDANDO_DOCS_PROP1';
-            await sock.sendMessage(from, { 
-              text: `🏦 Banco escolhido: *${bancoEscolhido}*\n\n📷 Por favor, envie as *fotos ou PDFs dos documentos* do Proponente 1 (RG/CNH, Renda, Endereço, Certidão).\n\nQuando terminar de enviar todas as fotos, digite *PRONTO*.` 
-            });
-            break;
-
-          case 'AGUARDANDO_DOCS_PROP1':
-            if (msg.message.imageMessage || msg.message.documentMessage) {
-              try {
-                const buffer = await downloadMediaMessage(msg, 'buffer');
-                const base64 = buffer.toString('base64');
-                const mimeType = msg.message.imageMessage?.mimetype || msg.message.documentMessage?.mimetype || "image/jpeg";
-                const fileName = `doc_${Date.now()}.${mimeType.includes('pdf') ? 'pdf' : 'jpg'}`;
-
-                session.documentos.push({ nomeArquivo: fileName, mimeType: mimeType, base64: base64 });
-                await sock.sendMessage(from, { text: `✅ Documento (${session.documentos.length}) recebido com sucesso!` });
-              } catch (e) {
-                await sock.sendMessage(from, { text: "⚠️ Erro ao baixar o arquivo, por favor reenvie." });
-              }
-              return;
-            }
-
-            if (text.toLowerCase() === 'pronto') {
-              session.step = 'PERGUNTA_PROP2';
-              await sock.sendMessage(from, { text: `✅ *${session.documentos.length} documento(s)* salvos para o Proponente 1.\n\n❓ *Existe mais um proponente nesta proposta?*\n\n1️⃣ SIM\n2️⃣ NÃO` });
-            } else {
-              await sock.sendMessage(from, { text: "Envie mais fotos ou digite *PRONTO* para prosseguir." });
-            }
-            break;
-
-          case 'PERGUNTA_PROP2':
-            if (text === '1' || text.toLowerCase() === 'sim' || text.toLowerCase() === 's') {
-              session.temProp2 = true;
-              session.step = 'AGUARDANDO_NOME_PROP2';
-              await sock.sendMessage(from, { text: "Digite o *Nome Completo do 2º Proponente*:" });
-            } else {
-              session.temProp2 = false;
-              session.step = 'AGUARDANDO_COMPRA_VENDA';
-              await sock.sendMessage(from, { text: "📌 *ETAPA 2: DADOS DO IMÓVEL*\n\nDigite o *Valor de Compra e Venda* (ex: 500.000):" });
-            }
-            break;
-
-          case 'AGUARDANDO_NOME_PROP2':
-            session.nomeCliente2 = text;
-            session.step = 'AGUARDANDO_CPF_PROP2';
-            await sock.sendMessage(from, { text: "Digite o *CPF do 2º Proponente*:" });
-            break;
-
-          case 'AGUARDANDO_CPF_PROP2':
-            session.cpf2 = text;
-            session.step = 'AGUARDANDO_TEL_PROP2';
-            await sock.sendMessage(from, { text: "Digite o *Telefone do 2º Proponente*:" });
-            break;
-
-          case 'AGUARDANDO_TEL_PROP2':
-            session.telefone2 = text.replace(/\D/g, '');
-            session.step = 'AGUARDANDO_COMPRA_VENDA';
-            await sock.sendMessage(from, { text: "📌 *ETAPA 2: DADOS DO IMÓVEL*\n\nDigite o *Valor de Compra e Venda* (ex: 500.000):" });
-            break;
-
-          case 'AGUARDANDO_COMPRA_VENDA':
-            session.valorCompraVenda = text;
-            session.step = 'AGUARDANDO_FINANCIAMENTO';
-            await sock.sendMessage(from, { text: "Digite o *Valor do Financiamento necessário* (ex: 400.000):" });
-            break;
-
-          case 'AGUARDANDO_FINANCIAMENTO':
-            session.valorFinanciamento = text;
-            session.step = 'AGUARDANDO_ENTRADA';
-            await sock.sendMessage(from, { text: "Digite o *Valor da Entrada* (ex: 100.000):" });
-            break;
-
-          case 'AGUARDANDO_ENTRADA':
-            session.valorEntrada = text;
-            await sock.sendMessage(from, { text: "⏳ *Enviando dados para o Google Sheets & Drive...*" });
-
-            try {
-              const payloadProp1 = {
-                imobiliaria: session.imobiliaria, nomeCliente: session.nomeCliente1, tipoProponente: "Proponente 1",
-                cpf: session.cpf1, telefone: session.telefone1, banco: session.banco,
-                valorCompraVenda: session.valorCompraVenda, valorFinanciamento: session.valorFinanciamento,
-                valorEntrada: session.valorEntrada, documentos: session.documentos
-              };
-
-              const resp1 = await axios.post(GOOGLE_WEBHOOK_URL, payloadProp1);
-              const idProposta = resp1.data.idProposta || "ID-GERADO";
-              const pastaUrl = resp1.data.pastaUrl || "";
-
-              if (session.temProp2) {
-                const payloadProp2 = {
-                  idProposta: idProposta, imobiliaria: session.imobiliaria, nomeCliente: session.nomeCliente2,
-                  tipoProponente: "Proponente 2", cpf: session.cpf2, telefone: session.telefone2,
-                  banco: session.banco, valorCompraVenda: session.valorCompraVenda,
-                  valorFinanciamento: session.valorFinanciamento, valorEntrada: session.valorEntrada
-                };
-                await axios.post(GOOGLE_WEBHOOK_URL, payloadProp2);
-              }
-
-              await sock.sendMessage(from, { 
-                text: `🎉 *PROPOSTA CADASTRADA COM SUCESSO!*\n\n📍 *ID Proposta:* ${idProposta}\n📂 *Pasta no Drive:* ${pastaUrl}\n\nO cliente já recebeu a mensagem de acompanhamento!` 
-              });
-
-              if (session.telefone1) {
-                const clientJid = `${session.telefone1}@s.whatsapp.net`;
-                await sock.sendMessage(clientJid, {
-                  text: `Olá *${session.nomeCliente1}*! Acompanhe em tempo real o status do seu financiamento com a *${session.imobiliaria}*.\n\n📍 *Banco:* ${session.banco}\n📍 *Status Atual:* ⏳ EM APROVAÇÃO`
-                }).catch(() => console.log("Erro mensagem cliente"));
-              }
-
-              delete sessions[from];
-
-            } catch (error) {
-              console.error("Erro Webhook:", error);
-              await sock.sendMessage(from, { text: "⚠️ Ocorreu um erro ao salvar na planilha. Tente novamente digitando *inicio*." });
-            }
-            break;
-        }
-
-      } catch (e) { console.error("Erro mensagem:", e); }
-    });
-
-  } catch (err) {
-    console.error("Erro inicialização Baileys:", err);
-    setTimeout(startWhatsAppBot, 5000);
+function configurarPlanilha() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  let sheetGeral = ss.getSheetByName("Geral");
+  if (!sheetGeral) {
+    sheetGeral = ss.getActiveSheet();
+    sheetGeral.setName("Geral");
   }
 
-  return sock;
+  const headers = [
+    "ID Proposta", "Data/Hora", "Imobiliária", "Proponente", "Tipo Proponente", 
+    "CPF", "Telefone", "Banco Escolhido", "Valor Compra/Venda", "Valor Financiamento", 
+    "Valor Entrada", "Status", "Link Pasta Drive", "ID Pasta Drive"
+  ];
+
+  configurarCabecalhoAba(sheetGeral, headers, "#1F4E78");
+
+  let sheetImobiliarias = ss.getSheetByName("Cadastros");
+  if (!sheetImobiliarias) {
+    sheetImobiliarias = ss.insertSheet("Cadastros");
+  }
+
+  sheetImobiliarias.clear();
+
+  const headersImob = ["Código", "Nome da Imobiliária", "Telefone", "Bairro", "Data Cadastro"];
+  configurarCabecalhoAba(sheetImobiliarias, headersImob, "#2E7D32");
+
+  sheetImobiliarias.appendRow(["101", "Imobiliária King", "11999998888", "Centro", "28/07/2026"]);
+  sheetImobiliarias.appendRow(["102", "Bons Dias", "11977776666", "Jardins", "28/07/2026"]);
+  sheetImobiliarias.appendRow(["103", "Ruytru Imóveis", "11988885555", "Moema", "28/07/2026"]);
+  sheetImobiliarias.appendRow(["104", "Luminux Max", "11967473738", "Tatuape", "29/07/2026"]);
+
+  ["Imobiliária King", "Bons Dias", "Ruytru Imóveis", "Luminux Max"].forEach(nome => {
+    obterOuCriarAbaImobiliaria(ss, nome, headers);
+  });
+
+  Logger.log("✅ Planilha configurada com sucesso!");
 }
 
-app.listen(PORT, () => {
-  console.log(`🌐 Servidor rodando na porta ${PORT}`);
-  startWhatsAppBot();
-});
+function configurarCabecalhoAba(sheet, headers, corFundo) {
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setBackground(corFundo)
+             .setFontColor("#FFFFFF")
+             .setFontWeight("bold")
+             .setHorizontalAlignment("center");
+
+  sheet.setColumnWidth(1, 100);
+  sheet.setColumnWidth(2, 180);
+  sheet.setColumnWidth(3, 140);
+  sheet.setColumnWidth(4, 140);
+  sheet.setColumnWidth(5, 120);
+
+  if (headers.length > 5) {
+    sheet.setColumnWidth(6, 120);
+    sheet.setColumnWidth(7, 130);
+    sheet.setColumnWidth(8, 110);
+    sheet.setColumnWidth(9, 140);
+    sheet.setColumnWidth(10, 140);
+    sheet.setColumnWidth(11, 130);
+    sheet.setColumnWidth(12, 140);
+    sheet.setColumnWidth(13, 200);
+    sheet.setColumnWidth(14, 150);
+
+    const statusRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(["Em Cadastro", "Em Aprovação", "Aprovado", "Reprovado", "Cancelado"], true)
+      .setAllowInvalid(false)
+      .build();
+    sheet.getRange("L2:L1000").setDataValidation(statusRule);
+  }
+
+  sheet.setFrozenRows(1);
+}
+
+function obterOuCriarAbaImobiliaria(ss, nomeImobiliaria, headers) {
+  const nomeLimpo = String(nomeImobiliaria || "Imobiliária").trim();
+  let sheet = ss.getSheetByName(nomeLimpo);
+  if (!sheet) {
+    sheet = ss.insertSheet(nomeLimpo);
+    const defaultHeaders = headers || [
+      "ID Proposta", "Data/Hora", "Imobiliária", "Proponente", "Tipo Proponente", 
+      "CPF", "Telefone", "Banco Escolhido", "Valor Compra/Venda", "Valor Financiamento", 
+      "Valor Entrada", "Status", "Link Pasta Drive", "ID Pasta Drive"
+    ];
+    configurarCabecalhoAba(sheet, defaultHeaders, "#4A607A");
+  }
+  return sheet;
+}
+
+function normalizarTexto(texto) {
+  return String(texto || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function buscarImobiliariaPorNome(nomeBuscado) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("Cadastros");
+  if (!sheet) return null;
+
+  const rows = sheet.getDataRange().getValues();
+  const nomeNormalizadoBusca = normalizarTexto(nomeBuscado);
+
+  for (let i = 1; i < rows.length; i++) {
+    const nomeCadastrado = String(rows[i][1] || "").trim();
+    if (nomeCadastrado !== "") {
+      if (normalizarTexto(nomeCadastrado) === nomeNormalizadoBusca) {
+        return { codigo: String(rows[i][0]), nome: nomeCadastrado };
+      }
+    }
+  }
+  return null;
+}
+
+function cadastrarNovaImobiliaria(nome, telefone, bairro) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName("Cadastros");
+  if (!sheet) {
+    sheet = ss.insertSheet("Cadastros");
+    configurarCabecalhoAba(sheet, ["Código", "Nome da Imobiliária", "Telefone", "Bairro", "Data Cadastro"], "#2E7D32");
+  }
+
+  const nomeLimpo = String(nome || "Imobiliária Nova").trim();
+  const telLimpo = String(telefone || "").trim();
+  const bairroLimpo = String(bairro || "").trim();
+
+  const existente = buscarImobiliariaPorNome(nomeLimpo);
+  if (existente) {
+    return existente;
+  }
+
+  const totalRows = sheet.getLastRow();
+  const novoCodigo = String(100 + totalRows);
+  const dataHoje = new Date().toLocaleDateString("pt-BR");
+
+  sheet.appendRow([novoCodigo, nomeLimpo, telLimpo, bairroLimpo, dataHoje]);
+  obterOuCriarAbaImobiliaria(ss, nomeLimpo);
+
+  return { codigo: novoCodigo, nome: nomeLimpo };
+}
+
+function obterOuCriarPastaRaiz() {
+  const folders = DriveApp.getFoldersByName(PASTA_RAIZ_NOME);
+  if (folders.hasNext()) return folders.next();
+  return DriveApp.createFolder(PASTA_RAIZ_NOME);
+}
+
+function criarEstruturaCasoDrive(nomeImobiliaria, idProposta, nomeCliente) {
+  const pastaRaiz = obterOuCriarPastaRaiz();
+  let pastaImobiliaria;
+  const imobFolders = pastaRaiz.getFoldersByName(nomeImobiliaria);
+  if (imobFolders.hasNext()) {
+    pastaImobiliaria = imobFolders.next();
+  } else {
+    pastaImobiliaria = pastaRaiz.createFolder(nomeImobiliaria);
+  }
+
+  const nomePastaCaso = `${idProposta} - ${nomeCliente}`;
+  const pastaCaso = pastaImobiliaria.createFolder(nomePastaCaso);
+  const pastaCliente = pastaCaso.createFolder("Cliente");
+
+  return {
+    pastaCasoId: pastaCaso.getId(),
+    pastaCasoUrl: pastaCaso.getUrl(),
+    pastaClienteId: pastaCliente.getId()
+  };
+}
+
+function onEdit(e) {
+  if (!e) return;
+  const range = e.range;
+  const sheet = range.getSheet();
+  
+  if (range.getColumn() === 12 && range.getRow() > 1) {
+    const novoStatus = String(e.value).trim();
+    if (novoStatus.toLowerCase() === "aprovado") {
+      const row = range.getRow();
+      const idPastaDrive = sheet.getRange(row, 14).getValue();
+
+      if (idPastaDrive) {
+        try {
+          const pastaCaso = DriveApp.getFolderById(idPastaDrive);
+          if (!pastaCaso.getFoldersByName("Imóvel").hasNext()) pastaCaso.createFolder("Imóvel");
+          if (!pastaCaso.getFoldersByName("Vendedores").hasNext()) pastaCaso.createFolder("Vendedores");
+        } catch (err) {
+          Logger.log("Erro: " + err.toString());
+        }
+      }
+    }
+  }
+}
+
+function doGet(e) {
+  const action = e ? e.parameter.action : "";
+  const name = e ? e.parameter.name : "";
+
+  if ((action === "verifyName" || action === "verifyCode") && name) {
+    const imob = buscarImobiliariaPorNome(name);
+    if (imob) {
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", found: true, codigo: imob.codigo, imobiliaria: imob.nome })).setMimeType(ContentService.MimeType.JSON);
+    } else {
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", found: false })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "API Ativa" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    if (data.action === "cadastrarImobiliaria") {
+      const novaImob = cadastrarNovaImobiliaria(data.nome, data.telefone, data.bairro);
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", codigo: novaImob.codigo, imobiliaria: novaImob.nome })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    let sheetGeral = ss.getSheetByName("Geral");
+    if (!sheetGeral) sheetGeral = ss.getActiveSheet();
+
+    const proximaLinha = sheetGeral.getLastRow() + 1;
+    const idProposta = data.idProposta || `ID-${String(proximaLinha - 1).padStart(3, '0')}`;
+    const dataHora = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+
+    let driveInfo = { pastaCasoUrl: "", pastaCasoId: "" };
+    if (data.tipoProponente === "Proponente 1" || !data.tipoProponente) {
+      driveInfo = criarEstruturaCasoDrive(data.imobiliaria, idProposta, data.nomeCliente);
+    } else {
+      const rows = sheetGeral.getDataRange().getValues();
+      for (let i = 1; i < rows.length; i++) {
+        if (rows[i][0] === idProposta) {
+          driveInfo.pastaCasoUrl = rows[i][12];
+          driveInfo.pastaCasoId = rows[i][13];
+          break;
+        }
+      }
+    }
+
+    if (data.documentos && Array.isArray(data.documentos) && driveInfo.pastaCasoId) {
+      salvarDocumentosNoDrive(driveInfo.pastaCasoId, data.documentos);
+    }
+
+    const rowData = [
+      idProposta, dataHora, data.imobiliaria || "", data.nomeCliente || "", data.tipoProponente || "Proponente 1",
+      data.cpf || "", data.telefone || "", data.banco || "", data.valorCompraVenda || "", data.valorFinanciamento || "",
+      data.valorEntrada || "", "Em Aprovação", driveInfo.pastaCasoUrl, driveInfo.pastaCasoId
+    ];
+
+    sheetGeral.appendRow(rowData);
+    if (data.tipoProponente === "Proponente 2") {
+      sheetGeral.getRange(sheetGeral.getLastRow(), 1, 1, rowData.length).setBackground("#F2F4F7");
+    }
+
+    if (data.imobiliaria) {
+      const sheetImob = obterOuCriarAbaImobiliaria(ss, data.imobiliaria);
+      sheetImob.appendRow(rowData);
+      if (data.tipoProponente === "Proponente 2") {
+        sheetImob.getRange(sheetImob.getLastRow(), 1, 1, rowData.length).setBackground("#F2F4F7");
+      }
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", idProposta: idProposta, pastaUrl: driveInfo.pastaCasoUrl })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: error.toString() })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function salvarDocumentosNoDrive(idPastaCaso, documentos) {
+  try {
+    const pastaCaso = DriveApp.getFolderById(idPastaCaso);
+    let pastaCliente;
+    const subfolders = pastaCaso.getFoldersByName("Cliente");
+    if (subfolders.hasNext()) pastaCliente = subfolders.next();
+    else pastaCliente = pastaCaso.createFolder("Cliente");
+
+    documentos.forEach(doc => {
+      if (doc.base64 && doc.nomeArquivo) {
+        const bytes = Utilities.base64Decode(doc.base64);
+        const blob = Utilities.newBlob(bytes, doc.mimeType || "image/jpeg", doc.nomeArquivo);
+        pastaCliente.createFile(blob);
+      }
+    });
+  } catch (err) {
+    Logger.log("Erro ao salvar arquivos: " + err.toString());
+  }
+}
