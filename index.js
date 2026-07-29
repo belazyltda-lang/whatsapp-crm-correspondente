@@ -108,6 +108,7 @@ async function enviarDadoAtual(from, s) {
 }
 
 async function startWhatsAppBot() {
+  console.log('🚀 startWhatsAppBot() chamado...');
   const authFolder = path.join(__dirname, 'auth_info');
   try {
     if (!fs.existsSync(authFolder)) fs.mkdirSync(authFolder, { recursive: true });
@@ -116,7 +117,8 @@ async function startWhatsAppBot() {
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
-      if (qr) { currentQRCodeData = qr; isConnected = false; }
+      console.log('connection.update:', { connection: connection, hasQR: !!qr });
+      if (qr) { console.log('✅ QR CODE GERADO!'); currentQRCodeData = qr; isConnected = false; }
       if (connection === 'open') { isConnected = true; currentQRCodeData = ""; }
       if (connection === 'close') {
         isConnected = false;
@@ -324,6 +326,8 @@ async function startWhatsAppBot() {
       } catch (e) {}
     });
   } catch (err) {
+    console.error('❌ ERRO NO BAILEYS:', err.message);
+    console.error(err.stack);
     if (fs.existsSync(authFolder)) { try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e){} }
     setTimeout(startWhatsAppBot, 5000);
   }
