@@ -1,6 +1,6 @@
 /**
  * ROBÔ DE WHATSAPP - CORRESPONDENTE BANCÁRIO (RECEITA DE BANCO)
- * Com Self-Ping Interno 24/7 + Bloco de Revisão Final + Bloco de Observações
+ * Com Notificação Automática ao Cliente no Cadastro e Notificações ao Aprovar Proposta
  */
 
 const express = require('express');
@@ -42,6 +42,42 @@ setInterval(async () => {
     console.log("Self-ping notice:", err.message);
   }
 }, 4 * 60 * 1000);
+
+// 🔔 ENDPOINT DE NOTIFICAÇÃO DE APROVAÇÃO (Disparado pelo Google Sheets ao mudar Status para Aprovado)
+app.post('/notificar-aprovacao', async (req, res) => {
+  try {
+    const { idProposta, nomeCliente, cpf, telefoneCliente, whatsappImobiliaria } = req.body;
+    console.log(`🔔 Recebida notificação de aprovação para a proposta ${idProposta} - ${nomeCliente}`);
+
+    if (!sock || !isConnected) {
+      return res.status(503).json({ status: "error", message: "WhatsApp desconectado" });
+    }
+
+    // 1. Mensagem para a Imobiliária / Corretor (quem enviou a proposta)
+    if (whatsappImobiliaria) {
+      const imobJid = whatsappImobiliaria.includes('@') ? whatsappImobiliaria : `${whatsappImobiliaria.replace(/\D/g, '')}@s.whatsapp.net`;
+      await sock.sendMessage(imobJid, {
+        text: `🎉 *Ótima notícia!* O cliente *${idProposta} - ${nomeCliente} (CPF: ${cpf})* está *APROVADO*!`
+      }).catch(err => console.error("Erro mensagem imob aprovação:", err));
+    }
+
+    // Pequena pausa de 1.5s entre envios para segurança da API
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    // 2. Mensagem para o Cliente Final (Proponente 1)
+    if (telefoneCliente) {
+      const clientJid = `${telefoneCliente.replace(/\D/g, '')}@s.whatsapp.net`;
+      await sock.sendMessage(clientJid, {
+        text: `🎉 *Pode comemorar!* Sua proposta está *APROVADA*! Agora aguarde os próximos passos, eu vou te informando por aqui.\n\n_(⚠️ Nenhuma resposta é necessária, o Robô não responderá nesta conversa)_`
+      }).catch(err => console.error("Erro mensagem cliente aprovação:", err));
+    }
+
+    return res.json({ status: "success", message: "Notificações de aprovação enviadas!" });
+  } catch (error) {
+    console.error("Erro rota notificar-aprovacao:", error);
+    return res.status(500).json({ status: "error", message: error.toString() });
+  }
+});
 
 app.get('/', async (req, res) => {
   if (isConnected) {
@@ -251,7 +287,7 @@ async function startWhatsAppBot() {
                 cpf: session.cpf1, telefone: session.telefone1, banco: session.banco,
                 valorCompraVenda: session.valorCompraVenda, valorFinanciamento: session.valorFinanciamento,
                 valorEntrada: session.valorEntrada, observacao: session.observacao || "Nenhuma",
-                documentos: session.documentos
+                whatsappOrigem: from, documentos: session.documentos
               };
 
               const resp1 = await axios.post(GOOGLE_WEBHOOK_URL, payloadProp1);
@@ -264,7 +300,7 @@ async function startWhatsAppBot() {
                   tipoProponente: "Proponente 2", cpf: session.cpf2, telefone: session.telefone2,
                   banco: session.banco, valorCompraVenda: session.valorCompraVenda,
                   valorFinanciamento: session.valorFinanciamento, valorEntrada: session.valorEntrada,
-                  observacao: session.observacao || "Nenhuma"
+                  observacao: session.observacao || "Nenhuma", whatsappOrigem: from
                 };
                 await axios.post(GOOGLE_WEBHOOK_URL, payloadProp2);
               }
@@ -273,11 +309,12 @@ async function startWhatsAppBot() {
                 text: `🎉 *PROPOSTA CADASTRADA COM SUCESSO!*\n\n📍 *ID Proposta:* ${idProposta}\n📂 *Pasta no Drive:* ${pastaUrl}\n\nO cliente já recebeu a mensagem de acompanhamento!` 
               });
 
+              // MENSAGEM PARA O CLIENTE (PROPONENTE 1) AO CONCLUIR CADASTRO
               if (session.telefone1) {
-                const clientJid = `${session.telefone1}@s.whatsapp.net`;
+                const clientJid = `${session.telefone1.replace(/\D/g, '')}@s.whatsapp.net`;
                 await sock.sendMessage(clientJid, {
-                  text: `Olá *${session.nomeCliente1}*! Acompanhe em tempo real o status do seu financiamento com a *${session.imobiliaria}*.\n\n📍 *Banco:* ${session.banco}\n📍 *Status Atual:* ⏳ EM APROVAÇÃO`
-                }).catch(() => console.log("Erro mensagem cliente"));
+                  text: `Ótima notícia! 🎉 Sua proposta já está em análise no banco escolhido (*${session.banco}*), e está com o status de: *EM APROVAÇÃO*. Assim que houver uma atualização te retornaremos.\n\n_(⚠️ Nenhuma resposta é necessária, o Robô não responderá nesta conversa)_`
+                }).catch(err => console.log("Erro mensagem inicial cliente:", err.message));
               }
 
               delete sessions[from];
