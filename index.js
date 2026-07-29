@@ -22,7 +22,7 @@ const dummyFn = () => {};
 const mockLogger = { level: 'silent', trace: dummyFn, debug: dummyFn, info: dummyFn, warn: dummyFn, error: dummyFn, fatal: dummyFn, isLevelEnabled: () => false, child: () => mockLogger };
 
 setInterval(async () => {
-  try { await axios.get(process.env.RENDER_EXTERNAL_URL || "https://whatsapp-crm-correspondente.onrender.com"); } catch (e) {}
+  try { await axios.get(process.env.APP_URL || "https://whatsapp-crm-correspondente.onrender.com"); } catch (e) {}
 }, 4 * 60 * 1000);
 
 app.get('/logout', async (req, res) => {
@@ -108,7 +108,7 @@ async function enviarDadoAtual(from, s) {
 }
 
 async function startWhatsAppBot() {
-  console.log('🚀 startWhatsAppBot() chamado...');
+  console.log('🚀 Iniciando WhatsApp Bot...');
   const authFolder = path.join(__dirname, 'auth_info');
   try {
     if (!fs.existsSync(authFolder)) fs.mkdirSync(authFolder, { recursive: true });
@@ -117,12 +117,13 @@ async function startWhatsAppBot() {
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
-      console.log('connection.update:', { connection: connection, hasQR: !!qr });
-      if (qr) { console.log('✅ QR CODE GERADO!'); currentQRCodeData = qr; isConnected = false; }
+      console.log('Baileys status:', connection || 'qr', '| QR:', !!qr);
+      if (qr) { currentQRCodeData = qr; isConnected = false; }
       if (connection === 'open') { isConnected = true; currentQRCodeData = ""; }
       if (connection === 'close') {
         isConnected = false;
         const statusCode = lastDisconnect?.error?.output?.statusCode;
+        console.log('Conexão fechada. StatusCode:', statusCode);
         if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403 || statusCode === 408 || statusCode === 428) {
           if (fs.existsSync(authFolder)) { try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e){} }
         }
@@ -326,8 +327,7 @@ async function startWhatsAppBot() {
       } catch (e) {}
     });
   } catch (err) {
-    console.error('❌ ERRO NO BAILEYS:', err.message);
-    console.error(err.stack);
+    console.error('❌ ERRO Baileys:', err.message);
     if (fs.existsSync(authFolder)) { try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e){} }
     setTimeout(startWhatsAppBot, 5000);
   }
