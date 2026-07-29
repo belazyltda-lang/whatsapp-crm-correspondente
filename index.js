@@ -333,3 +333,59 @@ app.listen(PORT, () => {
   console.log(`🌐 Servidor rodando na porta ${PORT}`);
   startWhatsAppBot();
 });
+
+# 📖 GUIA DE INSTALAÇÃO E TESTE: SISTEMA DE CORRESPONDENTE BANCÁRIO
+
+Este guia passo a passo explica como configurar a sua **Planilha do Google Sheets**, conectar o **Google Drive** e testar o **Fluxo do WhatsApp Bot**.
+
+---
+
+## 🚀 Passo 1: Configurar a Planilha no Google Sheets
+
+1. Abra o [Google Sheets](https://sheets.google.com) e crie uma **Nova Planilha em Branco**.
+2. Dê um nome para a planilha, por exemplo: `CRM Correspondente Bancário`.
+3. No menu superior da planilha, clique em **Extensões** > **Apps Script**.
+4. Apague todo o conteúdo que estiver na tela do Apps Script.
+5. Copie todo o código contido no arquivo `GoogleAppsScript.js` (gerado na pasta deste projeto) e cole na janela do Apps Script.
+6. Na barra superior do Apps Script, selecione a função `configurarPlanilha` na caixa de seleção e clique no botão **Executar (▶)**.
+7. Conceda as permissões solicitadas pela conta do Google.
+8. Volte para a sua planilha: você verá que a primeira linha foi formatada com os cabeçalhos coloridos e as colunas de **Status** já possuem o menu dropdown!
+
+---
+
+## 📁 Passo 2: Como funciona o Google Drive
+
+Você **não precisa criar nenhuma pasta manualmente** no seu Drive! O script cuida de tudo:
+
+1. Quando uma nova proposta entra pelo WhatsApp:
+   - O script cria a pasta principal chamada `Correspondência`.
+   - Dentro dela, cria a pasta da imobiliária (ex: `Imobiliária King`).
+   - Dentro da imobiliária, cria a pasta do caso (ex: `ID-001 - Maria`).
+   - Dentro da pasta do caso, cria inicialmente apenas a subpasta `📁 Cliente` contendo todas as imagens/documentos recebidos.
+2. **Ao aprovar**: Quando você abre a planilha e muda a célula de **Status** daquele caso para `"Aprovado"`, o Apps Script ativa o gatilho `onEdit` e cria automaticamente no Drive as subpastas `📁 Imóvel` e `📁 Vendedores`.
+
+---
+
+## 🤖 Passo 3: Como Testar a Simulação no Terminal
+
+Para ver o fluxo conversacional em funcionamento agora mesmo:
+
+1. Abra o terminal nesta pasta (`crm_correspondente`).
+2. Execute o comando:
+   ```bash
+   node whatsapp_bot_sim.js
+   ```
+3. Responda às perguntas interativas para ver o comportamento exato do robô de WhatsApp, a captura do 2º proponente, o salvamento das fotos e o disparo do gatilho ao aprovar.
+
+---
+
+## 🔌 Passo 4: Conectar com seu Número do WhatsApp Real
+
+Quando você quiser conectar seu WhatsApp real (usando Z-API, Evolution API, N8N ou Make):
+
+1. No Apps Script, clique em **Implantar** > **Nova implantação**.
+2. Clique no ícone de engrenagem ⚙️ e escolha **App da web**.
+3. Em *Executar como*, selecione **Eu**.
+4. Em *Quem pode acessar*, selecione **Qualquer pessoa** (Any).
+5. Clique em **Implantar** e copie a **URL do App da Web** gerada.
+6. Cole essa URL no seu serviço de WhatsApp (webhook de entrada) para receber mensagens e documentos automaticamente 24 horas por dia!
